@@ -1,7 +1,15 @@
+#![no_std]
 #![feature(try_trait)]
-mod dkg;
 mod errors;
 mod oprf;
 mod ppss;
-mod toprf;
 mod tppss;
+
+#[cfg(any(test, feature = "std"))]
+extern crate std;
+
+#[cfg(feature = "std")]
+mod dkg;
+
+#[cfg(feature = "std")]
+mod toprf;
