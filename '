@@ -48,15 +48,16 @@ impl TryFrom<DKGRecord> for PedersenDKGReadyPlayer {
     type Error = ThresholdError;
 
     fn try_from(record: DKGRecord) -> Result<Self, ThresholdError> {
+        
         check_threshold_args(record.n, record.t)?;
-        let vss = FeldmanVSSCommittedDealer {
-            t: record.t,
-            n: record.n,
-            secret: record.secret,
-            coeffs: record.coeffs.clone(),
-            broadcast_val: record.broadcast_val.clone(),
-            secret_shares: record.secret_shares.clone(),
-        };
+let vss = FeldmanVSSCommittedDealer(
+            t:record.t,
+            n:record.n,
+            secret:record.secret,
+            coeffs:record.coeffs.clone(),
+            broadcast_val:record.broadcast_val.clone(),
+            secret_shares:record.secret_shares.clone(),
+        );
         Ok(PedersenDKGReadyPlayer {
             id: record.player_id,
             vss,

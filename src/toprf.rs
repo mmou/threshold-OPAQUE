@@ -4,6 +4,8 @@ use crate::oprf::*;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 
+use std::vec::Vec;
+
 /// Threshold OPRF players use Pedersen DKG for generation of the secret scalar.
 ///
 /// ThresholdOprfProverPlayer uses move semantics to enforce protocol flow at compile-time.
@@ -51,7 +53,7 @@ impl ThresholdOprfProverInitPlayer {
 impl ThresholdOprfProverCommittedPlayer {
     pub fn receive(self, received_shares: Vec<Scalar>) -> ThresholdOprfProverReadyPlayer {
         let dkg = self.dkg.receive(received_shares);
-        let oprf: OprfProver = OprfProver::new(OprfKey::from(dkg.get_shares_sum()));
+        let oprf: OprfProver = OprfProver::new(OprfKey::new(dkg.get_shares_sum()));
 
         ThresholdOprfProverReadyPlayer { dkg, oprf }
     }

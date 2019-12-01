@@ -3,19 +3,18 @@ use crate::errors::*;
 use crate::oprf::*;
 use crate::ppss::*;
 use crate::toprf::*;
-use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
-use curve25519_dalek::scalar::Scalar;
-use snow::HandshakeState;
+use curve25519_dalek::ristretto::CompressedRistretto;
+
+use std::convert::TryFrom;
 
 // OPAQUE data structures
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ThresholdUserRecord {
     user_id: u64,
-    envelope: Vec<u8>,
-    server_pub_key: Vec<u8>,
-    server_priv_key: Vec<u8>,
-    client_pub_key: Vec<u8>,
+    envelope: [u8; SEALED_ENVELOPE_LEN],
+    server_keypair: Keypair,
+    client_pub_key: [u8; KEY_LEN],
     k: OprfKey,
     v: CompressedRistretto,
     dkg: DKGRecord,
@@ -29,63 +28,13 @@ struct ThresholdPlayerUserRecord {
     dkg: DKGRecord,
 }
 
-#[derive(Debug, Clone)]
-pub struct DKGRecord {
-    player_id: u64,
-    t: usize,
-    n: usize,
-    secret: Scalar,
-    coeffs: Vec<Scalar>,
-    broadcast_val: Vec<RistrettoPoint>,
-    secret_shares: Vec<Scalar>,
-    received_shares: Vec<Scalar>,
-}
-
-impl DKGRecord {
-    pub fn new(
-        player_id: u64,
-        t: usize,
-        n: usize,
-        secret: Scalar,
-        coeffs: Vec<Scalar>,
-        broadcast_val: Vec<RistrettoPoint>,
-        secret_shares: Vec<Scalar>,
-        received_shares: Vec<Scalar>,
-    ) -> Self {
-        DKGRecord {
-            player_id,
-            t,
-            n,
-            secret,
-            coeffs,
-            broadcast_val,
-            secret_shares,
-            received_shares,
-        }
-    }
-
-    pub fn to_toprf(&self) -> ThresholdOprfProverReadyPlayer {
-        let vss = FeldmanVSSCommittedDealer::from(
-            self.t,
-            self.n,
-            self.secret,
-            self.coeffs.clone(),
-            self.broadcast_val.clone(),
-            self.secret_shares.clone(),
-        );
-        let dkg = PedersenDKGReadyPlayer::from(self.player_id, vss, self.received_shares.clone());
-        let oprf: OprfProver = OprfProver::new(OprfKey::from(dkg.get_shares_sum()));
-        ThresholdOprfProverReadyPlayer { dkg, oprf }
-    }
-}
-
 // OPAQUE Server
 
+// the server directly interacting with client
 struct ThresholdServerRegisterAttempt {
     client_id: u64,
     toprf: ThresholdOprfProverReadyPlayer,
-    private: Vec<u8>,
-    public: Vec<u8>,
+    keypair: Keypair,
 }
 
 struct ThresholdServerPlayerRegisterAttempt {
@@ -93,12 +42,11 @@ struct ThresholdServerPlayerRegisterAttempt {
     toprf: ThresholdOprfProverReadyPlayer,
 }
 
+// the server directly interacting with client
 struct ThresholdServerLoginAttempt {
     client_id: u64,
     toprf: ThresholdOprfProverReadyPlayer,
-    private: Vec<u8>,
-    public: Vec<u8>,
-    ke: NoiseKeyExchange,
+    keypair: Keypair,
 }
 
 struct ThresholdServerPlayerLoginAttempt {
@@ -108,36 +56,28 @@ struct ThresholdServerPlayerLoginAttempt {
 
 // the server that directly interacts with the client
 impl ThresholdServerRegisterAttempt {
-    fn new(
-        client_id: u64,
-        toprf: ThresholdOprfProverReadyPlayer,
-        ke: NoiseKeyExchange,
-    ) -> Result<Self, HandshakeError> {
-        let keypair = ke.generate_keypair()?;
-
-        Ok(ThresholdServerRegisterAttempt {
+    fn new(client_id: u64, toprf: ThresholdOprfProverReadyPlayer, keypair: Keypair) -> Self {
+        ThresholdServerRegisterAttempt {
             client_id,
             toprf,
-            private: keypair.private,
-            public: keypair.public,
-        })
+            keypair,
+        }
     }
 
     fn generate_record(
         &mut self,
-        envelope: Vec<u8>,
-        client_pub_key: Vec<u8>,
+        envelope: [u8; SEALED_ENVELOPE_LEN],
+        client_pub_key: [u8; KEY_LEN],
     ) -> ThresholdUserRecord {
         let key = self.toprf.oprf.return_key();
         ThresholdUserRecord {
             user_id: self.client_id,
             envelope,
-            server_pub_key: self.public.clone(),
-            server_priv_key: self.private.clone(),
+            server_keypair: self.keypair.clone(),
             client_pub_key,
             k: key,
             v: key.pub_key(),
-            dkg: self.toprf.dkg.to_record(),
+            dkg: DKGRecord::from(self.toprf.dkg.clone()),
         }
     }
 }
@@ -151,7 +91,7 @@ impl ThresholdServerPlayerRegisterAttempt {
         let key = self.toprf.oprf.return_key();
         ThresholdPlayerUserRecord {
             user_id: self.client_id,
-            dkg: self.toprf.dkg.to_record(),
+            dkg: DKGRecord::from(self.toprf.dkg.clone()),
             k: key,
             v: key.pub_key(),
         }
@@ -159,27 +99,27 @@ impl ThresholdServerPlayerRegisterAttempt {
 }
 
 impl ThresholdServerLoginAttempt {
-    fn new(record: ThresholdUserRecord, ke: NoiseKeyExchange) -> Self {
-        ThresholdServerLoginAttempt {
-            client_id: record.user_id,
-            toprf: record.dkg.to_toprf(),
-            public: record.server_pub_key,
-            private: record.server_priv_key,
-            ke,
-        }
-    }
+    fn new(record: ThresholdUserRecord) -> Result<Self, ThresholdError> {
+        let dkg: PedersenDKGReadyPlayer = PedersenDKGReadyPlayer::try_from(record.dkg)?;
+        let oprf: OprfProver = OprfProver::new(OprfKey::new(dkg.get_shares_sum()));
 
-    fn initialize_key_exchange(&self) -> Result<HandshakeState, HandshakeError> {
-        self.ke.initialize(&self.private, false)
+        Ok(ThresholdServerLoginAttempt {
+            client_id: record.user_id,
+            toprf: ThresholdOprfProverReadyPlayer { dkg, oprf },
+            keypair: record.server_keypair,
+        })
     }
 }
 
 impl ThresholdServerPlayerLoginAttempt {
-    fn new(record: ThresholdPlayerUserRecord) -> Self {
-        ThresholdServerPlayerLoginAttempt {
+    fn new(record: ThresholdPlayerUserRecord) -> Result<Self, ThresholdError> {
+        let dkg: PedersenDKGReadyPlayer = PedersenDKGReadyPlayer::try_from(record.dkg)?;
+        let oprf: OprfProver = OprfProver::new(OprfKey::new(dkg.get_shares_sum()));
+
+        Ok(ThresholdServerPlayerLoginAttempt {
             client_id: record.user_id,
-            toprf: record.dkg.to_toprf(),
-        }
+            toprf: ThresholdOprfProverReadyPlayer { dkg, oprf },
+        })
     }
 }
 
@@ -188,8 +128,15 @@ mod tests {
 
     use super::*;
     use rand::rngs::OsRng;
+    use snow::HandshakeState;
+    use snow::Keypair as SnowKeypair;
 
+    use crate::ppss::tests::NoiseKeyExchange;
     use crate::ppss::{ClientLoginAttempt, ClientRegisterAttempt};
+
+    use std::println;
+    use std::string::String;
+    use std::vec;
 
     #[test]
     fn register_and_login() {
@@ -199,20 +146,25 @@ mod tests {
 
         // REGISTER
 
-        let mut rc = ClientRegisterAttempt::new(uid, pwd, &mut rng, Default::default()).unwrap();
+        let skc: SnowKeypair = NoiseKeyExchange::default().generate_keypair().unwrap();
+        let sks: SnowKeypair = NoiseKeyExchange::default().generate_keypair().unwrap();
+        let kc: Keypair = Keypair::from_bytes(&skc.private, &skc.public).unwrap();
+        let ks: Keypair = Keypair::from_bytes(&sks.private, &sks.public).unwrap();
+
+        let mut rc = ClientRegisterAttempt::new(&mut rng, uid, pwd, kc);
 
         // server begins by running DKG to generate the secrets used by the toprf players
         let toprf1 = ThresholdOprfProverPlayer::new(PedersenDKGPlayer::new(
             1,
-            FeldmanVSSDealer::new_with_random_secret(3, 5, &mut rng),
+            FeldmanVSSDealer::new_with_random_secret(3, 5, &mut rng).unwrap(),
         ));
         let toprf2 = ThresholdOprfProverPlayer::new(PedersenDKGPlayer::new(
             2,
-            FeldmanVSSDealer::new_with_random_secret(3, 5, &mut rng),
+            FeldmanVSSDealer::new_with_random_secret(3, 5, &mut rng).unwrap(),
         ));
         let toprf3 = ThresholdOprfProverPlayer::new(PedersenDKGPlayer::new(
             3,
-            FeldmanVSSDealer::new_with_random_secret(3, 5, &mut rng),
+            FeldmanVSSDealer::new_with_random_secret(3, 5, &mut rng).unwrap(),
         ));
 
         // server players run dkg
@@ -240,12 +192,12 @@ mod tests {
         let toprf2r = toprf2c.receive(shares2);
         let toprf3r = toprf3c.receive(shares3);
 
-        let mut rs = ThresholdServerRegisterAttempt::new(uid, toprf1r, Default::default()).unwrap();
+        let mut rs = ThresholdServerRegisterAttempt::new(uid, toprf1r, ks);
         let mut rsp2 = ThresholdServerPlayerRegisterAttempt::new(uid, toprf2r);
         let mut rsp3 = ThresholdServerPlayerRegisterAttempt::new(uid, toprf3r);
 
         // U and S run OPRF(kU;PwdU) with only U learning the result
-        let blinded = rc.oprf.blind(); // client
+        let blinded = rc.oprf.blind().unwrap(); // client
         let (pub_key1, response1) = rs.toprf.oprf.sign(blinded).unwrap(); // server (player 1)
         let (pub_key2, response2) = rsp2.toprf.oprf.sign(blinded).unwrap(); // server player 2
         let (pub_key3, response3) = rsp3.toprf.oprf.sign(blinded).unwrap(); // server player 3
@@ -261,11 +213,11 @@ mod tests {
             .unwrap();
         let rwd = rc.oprf.unblind(pub_key, response).unwrap(); // client
 
-        let client_priv_key = rc.private.clone(); // only for later assert
+        let client_priv_key = rc.keypair.private.clone(); // only for later assert
 
         //  U generates an "envelope" EnvU = AuthEnc(Rwd; PrivU, PubU, PubS)
         // U sends EnvU and PubU to S and erases PwdU, RwdU and all keys.
-        let server_pub_key = rs.public.clone(); // S sends server_pub_key to U
+        let server_pub_key = rs.keypair.public.clone(); // S sends server_pub_key to U
         let (envelope, client_pub_key) = rc
             .return_envelope_and_pub_key(&rwd[..], &server_pub_key)
             .unwrap(); // client
@@ -276,13 +228,13 @@ mod tests {
 
         // LOGIN
 
-        let mut lc = ClientLoginAttempt::new(uid, pwd, &mut rng, Default::default());
-        let mut ls = ThresholdServerLoginAttempt::new(record1.clone(), Default::default());
-        let mut lsp2 = ThresholdServerPlayerLoginAttempt::new(record2.clone());
-        let mut lsp3 = ThresholdServerPlayerLoginAttempt::new(record3.clone());
+        let mut lc = ClientLoginAttempt::new(&mut rng, uid, pwd);
+        let mut ls = ThresholdServerLoginAttempt::new(record1.clone()).unwrap();
+        let mut lsp2 = ThresholdServerPlayerLoginAttempt::new(record2.clone()).unwrap();
+        let mut lsp3 = ThresholdServerPlayerLoginAttempt::new(record3.clone()).unwrap();
 
         // run OPRF
-        let login_blinded = lc.oprf.blind();
+        let login_blinded = lc.oprf.blind().unwrap();
         let (lpub_key1, lresponse1) = ls.toprf.oprf.sign(login_blinded).unwrap(); // server (player 1)
         let (lpub_key2, lresponse2) = lsp2.toprf.oprf.sign(login_blinded).unwrap(); // server player 1
         let (lpub_key3, lresponse3) = lsp3.toprf.oprf.sign(login_blinded).unwrap(); // server player 2
@@ -299,21 +251,22 @@ mod tests {
         let login_rwd = lc.oprf.unblind(login_pub_key, login_response).unwrap();
 
         // U decrypts EnvU using RwdU to obtain PrivU, PubU, PubS.
-        let login_envelope: ClientEnvelope =
-            lc.load_envelope(record1.envelope, &login_rwd).unwrap();
+        let login_envelope: ClientEnvelope = lc.load_envelope(record1.envelope, login_rwd).unwrap();
 
         assert_eq!(&login_envelope.client_priv_key.to_vec(), &client_priv_key);
         assert_eq!(&login_envelope.client_pub_key.to_vec(), &client_pub_key);
-        assert_eq!(&login_envelope.server_pub_key.to_vec(), &ls.public);
-        assert_eq!(&rs.public, &ls.public);
-        assert_eq!(&rs.private, &ls.private);
+        assert_eq!(&login_envelope.server_pub_key.to_vec(), &ls.keypair.public);
+        assert_eq!(&rs.keypair, &ls.keypair);
         assert_eq!(&record1.client_pub_key, &client_pub_key);
-        assert_eq!(&record1.server_pub_key, &ls.public);
-        assert_eq!(&record1.server_priv_key, &ls.private);
+        assert_eq!(&record1.server_keypair, &ls.keypair);
 
         // run the specified KE protocol using their respective public and private keys.
-        let mut ns: HandshakeState = ls.initialize_key_exchange().unwrap();
-        let mut nc: HandshakeState = lc.initialize_key_exchange().unwrap();
+        let mut ns: HandshakeState = NoiseKeyExchange::default()
+            .initialize(&ls.keypair, false)
+            .unwrap();
+        let mut nc: HandshakeState = NoiseKeyExchange::default()
+            .initialize(&lc.keypair, true)
+            .unwrap();
 
         let (mut read_buf, mut msg) = ([0u8; 1024], [0u8; 1024]);
 
