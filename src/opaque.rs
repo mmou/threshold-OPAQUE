@@ -342,7 +342,7 @@ pub(crate) mod tests {
         let uid = 1;
         let pwd = "password";
 
-        // REGISTER
+        // REGISTER (assumes a secure channel, authenticated out-of-band)
 
         let skc: SnowKeypair = NoiseKeyExchange::default().generate_keypair().unwrap();
         let sks: SnowKeypair = NoiseKeyExchange::default().generate_keypair().unwrap();
