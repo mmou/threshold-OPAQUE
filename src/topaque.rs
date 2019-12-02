@@ -1,7 +1,7 @@
 use crate::dkg::*;
 use crate::errors::*;
+use crate::opaque::*;
 use crate::oprf::*;
-use crate::ppss::*;
 use crate::toprf::*;
 use curve25519_dalek::ristretto::CompressedRistretto;
 
@@ -131,8 +131,8 @@ mod tests {
     use snow::HandshakeState;
     use snow::Keypair as SnowKeypair;
 
-    use crate::ppss::tests::NoiseKeyExchange;
-    use crate::ppss::{ClientLoginAttempt, ClientRegisterAttempt};
+    use crate::opaque::tests::NoiseKeyExchange;
+    use crate::opaque::{ClientLoginAttempt, ClientRegisterAttempt};
 
     use std::println;
     use std::string::String;

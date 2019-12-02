@@ -1,9 +1,12 @@
 #![no_std]
 #![feature(try_trait)]
 mod errors;
+
+mod opaque;
 mod oprf;
-mod ppss;
-mod tppss;
+
+// Threshold OPAQUE implementation, which requires a DKG and threshold OPRF
+mod topaque;
 
 #[cfg(any(test, feature = "std"))]
 extern crate std;
