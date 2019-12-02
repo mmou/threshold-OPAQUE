@@ -45,8 +45,8 @@ https://csrc.nist.gov/CSRC/media/Presentations/Threshold-Cryptography-Ready-for-
 A threshold OPRF requires `n` servers (the OPRF signers) to run a DKG protocol
 to generate private key shares, which are used as each OPRF signer's secret
 key. The OPRF signers each sign the client's blinded input with their secret
-key (as usual). Then, the client's output is reconstructed by combining at least
-`t` (minimum number required to reconstruct secret)'s signed inputs. 
+key (as usual). Then, the client's output is reconstructed by combining at
+least `t` (minimum number required to reconstruct secret)'s signed inputs.
 
 We use the threshold OPRF to support threshold OPAQUE. No client-side
 modifications are necessary. For ease of use, this implementation designates
