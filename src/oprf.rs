@@ -8,6 +8,7 @@ use rand_core::{CryptoRng, RngCore};
 use sha2::{Sha256, Sha512};
 use sodiumoxide::crypto::secretbox::xsalsa20poly1305::KEYBYTES;
 
+pub const PWD_LEN: usize = 64; // required by RistrettoPoint::from_uniform_bytes
 pub const RWD_LEN: usize = KEYBYTES; // 32
 
 #[derive(Debug, Copy, Clone)]
@@ -39,28 +40,31 @@ impl OprfKey {
 }
 
 pub struct OprfVerifier {
-    input: CompressedRistretto,
+    input: [u8; PWD_LEN],
     blind: Scalar,
 }
 
 impl OprfVerifier {
-    pub fn new<R>(input: &str, rng: &mut R) -> Self
+    pub fn new<R>(pwd: &str, rng: &mut R) -> Self
     where
         R: RngCore + CryptoRng,
     {
-        let point = RistrettoPoint::hash_from_bytes::<Sha512>(input.as_bytes()).compress();
+        // doing this instead of RistrettoPoint::hash_from_bytes in order to store a fixed-size array in OprfVerifier
+        let mut hasher = Sha512::default();
+        hasher.input(pwd.as_bytes());
+        let hex: GenericArray<u8, <Sha512 as digest::Digest>::OutputSize> = hasher.result();
+        let mut input = [0u8; PWD_LEN];
+        input.copy_from_slice(&hex.to_vec()[..PWD_LEN]);
+
         OprfVerifier {
-            input: point,
+            input,
             blind: Scalar::random(rng),
         }
     }
 
     pub fn blind(&mut self) -> Result<CompressedRistretto, TokenError> {
-        let blinded = self
-            .input
-            .decompress()
-            .ok_or(TokenError(InternalError::DecompressionError))?
-            * self.blind;
+        let point = RistrettoPoint::from_uniform_bytes(&self.input);
+        let blinded = point * self.blind;
         Ok(blinded.compress())
     }
 
@@ -74,14 +78,12 @@ impl OprfVerifier {
             .ok_or(TokenError(InternalError::DecompressionError))?
             * self.blind.invert();
         let mut hasher = Sha256::default();
-        hasher.input(self.input.to_bytes());
+        hasher.input(&self.input[..]);
         hasher.input(server_pub_key.as_bytes());
         hasher.input(unblinded_output.compress().as_bytes());
-
         let hex: GenericArray<u8, <Sha256 as digest::Digest>::OutputSize> = hasher.result();
-
         let mut rwd = [9u8; RWD_LEN];
-        rwd.copy_from_slice(&hex.to_vec());
+        rwd.copy_from_slice(&hex.to_vec()[..RWD_LEN]);
         Ok(rwd)
     }
 }

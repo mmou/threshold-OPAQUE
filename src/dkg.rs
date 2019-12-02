@@ -455,7 +455,7 @@ mod tests {
         // secret can be reconstructed from any t servers' received shares
         let ids: Vec<FeldmanVSSReadyPlayer> =
             vec![player1r, player2r, player3r, player4r, player5r];
-        for x in 0..4 {
+        for _x in 0..4 {
             let sample: Vec<&FeldmanVSSReadyPlayer> = ids.choose_multiple(&mut rng, t).collect();
             assert_eq!(
                 dealerc.secret,
@@ -571,7 +571,7 @@ mod tests {
 
         let ids: Vec<PedersenDKGReadyPlayer> =
             vec![player1r, player2r, player3r, player4r, player5r];
-        for x in 0..4 {
+        for _x in 0..4 {
             let sample: Vec<&PedersenDKGReadyPlayer> = ids.choose_multiple(&mut rng, t).collect();
 
             // secret can be reconstructed from any t servers' received shares
