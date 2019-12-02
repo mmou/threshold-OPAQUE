@@ -1,9 +1,12 @@
 use core::fmt;
 use core::fmt::Display;
-use snow::error::Error as SnowError;
+
+#[cfg(feature = "std")]
 use std::error::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+/// Internal crypto errors.  Most application-level developers will likely not
+/// need to pay any attention to these.
 pub enum InternalError {
     /// An error in the length of bytes handed to a constructor.
     /// Takes `name` of the type returning the error, and the `length` in bytes it expects
@@ -29,6 +32,7 @@ impl Display for InternalError {
     }
 }
 
+#[cfg(feature = "std")]
 impl Error for InternalError {}
 
 /// Errors when converting keys and/or tokens to or from wire formats
@@ -41,30 +45,25 @@ impl Display for TokenError {
     }
 }
 
+#[cfg(feature = "std")]
 impl Error for TokenError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         return Some(&self.0);
     }
 }
 
-/// Errors with handshake (Snow library)
-#[derive(Debug)]
-pub struct HandshakeError(SnowError);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ThresholdError {
+    ArgumentError { n: usize, t: usize },
+}
 
-impl HandshakeError {
-    pub fn new(e: SnowError) -> Self {
-        HandshakeError(e)
+impl Display for ThresholdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            ThresholdError::ArgumentError { n, t } => write!(f, "n ({}) is not >= t ({})", n, t),
+        }
     }
 }
 
-impl Display for HandshakeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Error for HandshakeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        return Some(&self.0);
-    }
-}
+#[cfg(feature = "std")]
+impl Error for ThresholdError {}

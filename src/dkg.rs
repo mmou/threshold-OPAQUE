@@ -1,8 +1,84 @@
-use crate::tppss::DKGRecord;
+use crate::errors::ThresholdError;
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand_core::{CryptoRng, RngCore};
+
+use std::convert::TryFrom;
+use std::vec;
+use std::vec::Vec;
+
+#[derive(Debug, Clone)]
+pub struct DKGRecord {
+    player_id: u64,
+    t: usize,
+    n: usize,
+    secret: Scalar,
+    coeffs: Vec<Scalar>,
+    broadcast_val: Vec<RistrettoPoint>,
+    secret_shares: Vec<Scalar>,
+    received_shares: Vec<Scalar>,
+}
+
+impl DKGRecord {
+    pub fn new(
+        player_id: u64,
+        t: usize,
+        n: usize,
+        secret: Scalar,
+        coeffs: Vec<Scalar>,
+        broadcast_val: Vec<RistrettoPoint>,
+        secret_shares: Vec<Scalar>,
+        received_shares: Vec<Scalar>,
+    ) -> Self {
+        DKGRecord {
+            player_id,
+            t,
+            n,
+            secret,
+            coeffs,
+            broadcast_val,
+            secret_shares,
+            received_shares,
+        }
+    }
+}
+
+impl TryFrom<DKGRecord> for PedersenDKGReadyPlayer {
+    type Error = ThresholdError;
+
+    fn try_from(record: DKGRecord) -> Result<Self, ThresholdError> {
+        check_threshold_args(record.n, record.t)?;
+        let vss = FeldmanVSSCommittedDealer {
+            t: record.t,
+            n: record.n,
+            secret: record.secret,
+            coeffs: record.coeffs.clone(),
+            broadcast_val: record.broadcast_val.clone(),
+            secret_shares: record.secret_shares.clone(),
+        };
+        Ok(PedersenDKGReadyPlayer {
+            id: record.player_id,
+            vss,
+            received_shares: record.received_shares.clone(),
+        })
+    }
+}
+
+impl From<PedersenDKGReadyPlayer> for DKGRecord {
+    fn from(player: PedersenDKGReadyPlayer) -> Self {
+        DKGRecord::new(
+            player.id,
+            player.vss.t,
+            player.vss.n,
+            player.vss.secret,
+            player.vss.coeffs.clone(),
+            player.vss.broadcast_val.clone(),
+            player.vss.secret_shares.clone(),
+            player.received_shares.clone(),
+        )
+    }
+}
 
 /// Feldman VSS involves one dealer and n non-dealer players.
 ///
@@ -41,12 +117,24 @@ pub struct FeldmanVSSCommittedDealer {
     secret_shares: Vec<Scalar>, // len = n; ith value is sent to player id i+1 (because ids are 1-indexed while lists are 0-indexed)
 }
 
+fn check_threshold_args(n: usize, t: usize) -> Result<(), ThresholdError> {
+    if n < t {
+        return Err(ThresholdError::ArgumentError { n, t });
+    }
+    Ok(())
+}
+
 impl FeldmanVSSDealer {
-    fn new<R>(secret: Scalar, t: usize, n: usize, rng: &mut R) -> FeldmanVSSInitDealer
+    fn new<R>(
+        secret: Scalar,
+        t: usize,
+        n: usize,
+        rng: &mut R,
+    ) -> Result<FeldmanVSSInitDealer, ThresholdError>
     where
         R: RngCore + CryptoRng,
     {
-        assert!(t <= n); // TODO: replace with err
+        check_threshold_args(n, t)?;
         let mut coeffs = vec![Default::default(); t];
         coeffs[0] = secret;
         // generate random coeffs
@@ -54,15 +142,19 @@ impl FeldmanVSSDealer {
             *c = Scalar::random(rng);
         }
 
-        FeldmanVSSInitDealer {
+        Ok(FeldmanVSSInitDealer {
             t,
             n,
             secret,
             coeffs,
-        }
+        })
     }
 
-    pub fn new_with_random_secret<R>(t: usize, n: usize, rng: &mut R) -> FeldmanVSSInitDealer
+    pub fn new_with_random_secret<R>(
+        t: usize,
+        n: usize,
+        rng: &mut R,
+    ) -> Result<FeldmanVSSInitDealer, ThresholdError>
     where
         R: RngCore + CryptoRng,
     {
@@ -110,24 +202,6 @@ impl FeldmanVSSCommittedDealer {
     pub fn get_share(&self, other_id: u64) -> Scalar {
         self.secret_shares[(other_id - 1) as usize]
     }
-
-    pub fn from(
-        t: usize,
-        n: usize,
-        secret: Scalar,
-        coeffs: Vec<Scalar>,
-        broadcast_val: Vec<RistrettoPoint>,
-        secret_shares: Vec<Scalar>,
-    ) -> Self {
-        FeldmanVSSCommittedDealer {
-            t,
-            n,
-            secret,
-            coeffs,
-            broadcast_val,
-            secret_shares,
-        }
-    }
 }
 
 pub struct FeldmanVSSPlayer {}
@@ -147,8 +221,9 @@ pub struct FeldmanVSSReadyPlayer {
 
 impl FeldmanVSSPlayer {
     // player id, t-degree polynomial, n total players
-    fn new(id: u64, t: usize, n: usize) -> FeldmanVSSInitPlayer {
-        FeldmanVSSInitPlayer { id, t, n }
+    fn new(id: u64, t: usize, n: usize) -> Result<FeldmanVSSInitPlayer, ThresholdError> {
+        check_threshold_args(n, t)?;
+        Ok(FeldmanVSSInitPlayer { id, t, n })
     }
 }
 
@@ -265,27 +340,6 @@ impl PedersenDKGReadyPlayer {
             self.get_share(other_id),
         )
     }
-
-    pub fn from(id: u64, vss: FeldmanVSSCommittedDealer, received_shares: Vec<Scalar>) -> Self {
-        PedersenDKGReadyPlayer {
-            id,
-            vss,
-            received_shares,
-        }
-    }
-
-    pub fn to_record(&self) -> DKGRecord {
-        DKGRecord::new(
-            self.id,
-            self.vss.t,
-            self.vss.n,
-            self.vss.secret,
-            self.vss.coeffs.clone(),
-            self.vss.broadcast_val.clone(),
-            self.vss.secret_shares.clone(),
-            self.received_shares.clone(),
-        )
-    }
 }
 
 // verify share received from other server using their broadcast_vals
@@ -295,7 +349,7 @@ fn verify(
     received_broadcast_vals: &[RistrettoPoint],
     received_share: Scalar,
 ) -> bool {
-    assert_eq!(received_broadcast_vals.len(), t);
+    assert_eq!(received_broadcast_vals.len(), t); // TODO: replace with error or generic array
     let user_scalar = Scalar::from(my_id);
     let output: RistrettoPoint = received_broadcast_vals
         .iter()
@@ -373,12 +427,12 @@ mod tests {
 
         let t = 3;
         let n = 5;
-        let dealer: FeldmanVSSInitDealer = FeldmanVSSDealer::new(secret, t, n, &mut rng);
-        let player1: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(1, t, n);
-        let player2: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(2, t, n);
-        let player3: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(3, t, n);
-        let player4: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(4, t, n);
-        let player5: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(5, t, n);
+        let dealer: FeldmanVSSInitDealer = FeldmanVSSDealer::new(secret, t, n, &mut rng).unwrap();
+        let player1: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(1, t, n).unwrap();
+        let player2: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(2, t, n).unwrap();
+        let player3: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(3, t, n).unwrap();
+        let player4: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(4, t, n).unwrap();
+        let player5: FeldmanVSSInitPlayer = FeldmanVSSPlayer::new(5, t, n).unwrap();
 
         let dealerc = dealer.commit();
 
@@ -401,7 +455,7 @@ mod tests {
         // secret can be reconstructed from any t servers' received shares
         let ids: Vec<FeldmanVSSReadyPlayer> =
             vec![player1r, player2r, player3r, player4r, player5r];
-        for x in 0..4 {
+        for _x in 0..4 {
             let sample: Vec<&FeldmanVSSReadyPlayer> = ids.choose_multiple(&mut rng, t).collect();
             assert_eq!(
                 dealerc.secret,
@@ -424,16 +478,26 @@ mod tests {
 
         let t = 3;
         let n = 5;
-        let player1: PedersenDKGInitPlayer =
-            PedersenDKGPlayer::new(1, FeldmanVSSDealer::new(secrets[0], t, n, &mut rng));
-        let player2: PedersenDKGInitPlayer =
-            PedersenDKGPlayer::new(2, FeldmanVSSDealer::new(secrets[1], t, n, &mut rng));
-        let player3: PedersenDKGInitPlayer =
-            PedersenDKGPlayer::new(3, FeldmanVSSDealer::new(secrets[2], t, n, &mut rng));
-        let player4: PedersenDKGInitPlayer =
-            PedersenDKGPlayer::new(4, FeldmanVSSDealer::new(secrets[3], t, n, &mut rng));
-        let player5: PedersenDKGInitPlayer =
-            PedersenDKGPlayer::new(5, FeldmanVSSDealer::new(secrets[4], t, n, &mut rng));
+        let player1: PedersenDKGInitPlayer = PedersenDKGPlayer::new(
+            1,
+            FeldmanVSSDealer::new(secrets[0], t, n, &mut rng).unwrap(),
+        );
+        let player2: PedersenDKGInitPlayer = PedersenDKGPlayer::new(
+            2,
+            FeldmanVSSDealer::new(secrets[1], t, n, &mut rng).unwrap(),
+        );
+        let player3: PedersenDKGInitPlayer = PedersenDKGPlayer::new(
+            3,
+            FeldmanVSSDealer::new(secrets[2], t, n, &mut rng).unwrap(),
+        );
+        let player4: PedersenDKGInitPlayer = PedersenDKGPlayer::new(
+            4,
+            FeldmanVSSDealer::new(secrets[3], t, n, &mut rng).unwrap(),
+        );
+        let player5: PedersenDKGInitPlayer = PedersenDKGPlayer::new(
+            5,
+            FeldmanVSSDealer::new(secrets[4], t, n, &mut rng).unwrap(),
+        );
 
         let player1c = player1.commit();
         let player2c = player2.commit();
@@ -507,7 +571,7 @@ mod tests {
 
         let ids: Vec<PedersenDKGReadyPlayer> =
             vec![player1r, player2r, player3r, player4r, player5r];
-        for x in 0..4 {
+        for _x in 0..4 {
             let sample: Vec<&PedersenDKGReadyPlayer> = ids.choose_multiple(&mut rng, t).collect();
 
             // secret can be reconstructed from any t servers' received shares

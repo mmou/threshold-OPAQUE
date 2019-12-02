@@ -6,6 +6,10 @@ use digest::Digest;
 use generic_array::GenericArray;
 use rand_core::{CryptoRng, RngCore};
 use sha2::{Sha256, Sha512};
+use sodiumoxide::crypto::secretbox::xsalsa20poly1305::KEYBYTES;
+
+pub const PWD_LEN: usize = 64; // required by RistrettoPoint::from_uniform_bytes
+pub const RWD_LEN: usize = KEYBYTES; // 32
 
 #[derive(Debug, Copy, Clone)]
 pub struct OprfKey {
@@ -13,7 +17,7 @@ pub struct OprfKey {
 }
 
 impl OprfKey {
-    pub fn from(key: Scalar) -> Self {
+    pub fn new(key: Scalar) -> Self {
         OprfKey { key }
     }
 
@@ -36,43 +40,51 @@ impl OprfKey {
 }
 
 pub struct OprfVerifier {
-    input: Vec<u8>,
+    input: [u8; PWD_LEN],
     blind: Scalar,
 }
 
 impl OprfVerifier {
-    pub fn new<R>(input: Vec<u8>, rng: &mut R) -> Self
+    pub fn new<R>(pwd: &str, rng: &mut R) -> Self
     where
         R: RngCore + CryptoRng,
     {
+        // doing this instead of RistrettoPoint::hash_from_bytes in order to store a fixed-size array in OprfVerifier
+        let mut hasher = Sha512::default();
+        hasher.input(pwd.as_bytes());
+        let hex: GenericArray<u8, <Sha512 as digest::Digest>::OutputSize> = hasher.result();
+        let mut input = [0u8; PWD_LEN];
+        input.copy_from_slice(&hex.to_vec()[..PWD_LEN]);
+
         OprfVerifier {
             input,
             blind: Scalar::random(rng),
         }
     }
 
-    pub fn blind(&mut self) -> CompressedRistretto {
-        let point = RistrettoPoint::hash_from_bytes::<Sha512>(&self.input);
+    pub fn blind(&mut self) -> Result<CompressedRistretto, TokenError> {
+        let point = RistrettoPoint::from_uniform_bytes(&self.input);
         let blinded = point * self.blind;
-        blinded.compress()
+        Ok(blinded.compress())
     }
 
     pub fn unblind(
         &mut self,
         server_pub_key: CompressedRistretto,
         signed_output: CompressedRistretto,
-    ) -> Result<GenericArray<u8, <Sha256 as digest::Digest>::OutputSize>, TokenError> {
+    ) -> Result<[u8; RWD_LEN], TokenError> {
         let unblinded_output = signed_output
             .decompress()
             .ok_or(TokenError(InternalError::DecompressionError))?
             * self.blind.invert();
         let mut hasher = Sha256::default();
-        hasher.input(&self.input);
+        hasher.input(&self.input[..]);
         hasher.input(server_pub_key.as_bytes());
         hasher.input(unblinded_output.compress().as_bytes());
-
-        let hex = hasher.result();
-        Ok(hex)
+        let hex: GenericArray<u8, <Sha256 as digest::Digest>::OutputSize> = hasher.result();
+        let mut rwd = [9u8; RWD_LEN];
+        rwd.copy_from_slice(&hex.to_vec()[..RWD_LEN]);
+        Ok(rwd)
     }
 }
 

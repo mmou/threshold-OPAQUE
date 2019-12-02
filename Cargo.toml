@@ -16,3 +16,7 @@ snow = { version = "0.6.1" }
 sodiumoxide = "0.2.4"
 rand_core = { version = "0.3.1", default-features = false }
 rand = { version = "0.6.0" }
+
+[features]
+default = ["std"]
+std = ["curve25519-dalek/std"]
