@@ -1,7 +1,5 @@
 # OPAQUE asymmetric PAKE, and its threshold implementation
 
-WIP.
-
 ## OPAQUE
 
 Implementation of OPAQUE protocol
